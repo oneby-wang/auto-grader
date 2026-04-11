@@ -195,7 +195,7 @@ class DashScopeScorer(BaseScorer):
             result = completion.choices[0].message.content.strip()
 
             # 从结果中提取数字
-           numbers = re.findall(r'\d+', result)
+            numbers = re.findall(r'\d+', result)
             if numbers:
                 return numbers[0]
 
@@ -333,7 +333,7 @@ def score_image_with_retry(
     max_score: int,
     prompt_template: str,
     max_retries: int = 3,
-    default_score: str = "80"
+    default_score: str = "0"
 ) -> str:
     """
     带重试机制的评分函数
