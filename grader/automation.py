@@ -4,8 +4,6 @@
 
 import os
 import time
-import sys
-from typing import Tuple, Optional
 
 try:
     import pyautogui
@@ -16,8 +14,12 @@ except ImportError:
     pyautogui = None
 
 from .config_loader import GraderConfig, QuestionConfig
-from .screenshot import take_screenshot_safe, ScreenshotError
-from .scorer import score_image_with_retry, validate_score
+from .screenshot import take_screenshot_safe
+from .scorer import (
+    ScorerFactory, BaseScorer,
+    score_image_with_retry, validate_score,
+    set_default_scorer
+)
 
 
 class AutomationError(Exception):
@@ -38,6 +40,35 @@ class AutoGrader:
         # 获取屏幕尺寸用于验证坐标
         self.screen_width, self.screen_height = pyautogui.size()
         print(f"屏幕分辨率: {self.screen_width}x{self.screen_height}")
+
+        # 初始化评分器
+        self.scorer = self._init_scorer()
+
+    def _init_scorer(self) -> BaseScorer:
+        """
+        根据配置初始化评分器
+
+        Returns:
+            BaseScorer 实例
+        """
+        provider = self.config.model_provider
+        model_config = self.config.get_scorer_config()
+
+        print(f"使用评分模型: {provider}")
+        if provider == "dashscope":
+            print("提示: 请确保已设置 DASHSCOPE_API_KEY 环境变量")
+
+        try:
+            scorer = ScorerFactory.create_scorer(provider, model_config)
+            # 设置为默认评分器，以便兼容旧接口
+            set_default_scorer(scorer)
+            return scorer
+        except Exception as e:
+            print(f"警告: 初始化评分器失败: {e}")
+            print("回退到模拟评分器")
+            fallback_scorer = ScorerFactory.create_scorer("mock")
+            set_default_scorer(fallback_scorer)
+            return fallback_scorer
 
     def _validate_coordinate(self, x: int, y: int, name: str) -> None:
         """验证坐标是否在屏幕范围内"""
@@ -92,13 +123,31 @@ class AutoGrader:
         print(f"  截图保存: {screenshot_path}")
         return screenshot_path
 
-    def _score_screenshot(self, screenshot_path: str) -> str:
+    def _score_screenshot(self, screenshot_path: str, question: QuestionConfig) -> str:
         """对截图进行评分"""
         print(f"  调用评分模型...")
-        score = score_image_with_retry(screenshot_path)
-        score = validate_score(score)
-        print(f"  获得评分: {score}")
-        return score
+        print(f"  题目: {question.name}")
+        if question.correct_answer:
+            print(f"  正确答案: {question.correct_answer}")
+
+        try:
+            score = self.scorer.score(
+                image_path=screenshot_path,
+                question_name=question.name,
+                correct_answer=question.correct_answer
+            )
+            score = validate_score(score)
+            print(f"  获得评分: {score}")
+            return score
+        except Exception as e:
+            print(f"  评分出错: {e}")
+            # 使用带重试的兼容接口
+            score = score_image_with_retry(
+                screenshot_path,
+                question_name=question.name,
+                correct_answer=question.correct_answer
+            )
+            return score
 
     def _input_score(self, question: QuestionConfig, score: str) -> None:
         """在指定输入框输入评分"""
@@ -131,6 +180,7 @@ class AutoGrader:
         result = {
             "page": page_index + 1,
             "question": question.name,
+            "correct_answer": question.correct_answer,
             "screenshot": None,
             "score": None,
             "success": False,
@@ -143,7 +193,7 @@ class AutoGrader:
             result["screenshot"] = screenshot_path
 
             # 2. 评分（调用模型）
-            score = self._score_screenshot(screenshot_path)
+            score = self._score_screenshot(screenshot_path, question)
             result["score"] = score
 
             # 3. 输入评分
@@ -170,8 +220,16 @@ class AutoGrader:
         print(f"\n配置信息:")
         print(f"  总页面数: {self.config.total_pages}")
         print(f"  题目配置数: {len(self.config.questions)}")
+        print(f"  模型提供商: {self.config.model_provider}")
         print(f"  页面间延迟: {self.config.delay_between_pages}秒")
         print(f"  截图保存目录: {self.config.screenshot_dir}")
+
+        # 打印题目信息
+        print(f"\n题目配置:")
+        for q in self.config.questions:
+            correct = f" (答案: {q.correct_answer})" if q.correct_answer else ""
+            print(f"  - {q.name}{correct}")
+
         print(f"\n注意事项:")
         print("  - 请将鼠标移到屏幕左上角可紧急停止程序")
         print("  - 确保目标应用窗口已打开且可见")
@@ -204,6 +262,7 @@ class AutoGrader:
                 self.results.append({
                     "page": page_index + 1,
                     "question": question.name,
+                    "correct_answer": question.correct_answer,
                     "screenshot": None,
                     "score": None,
                     "success": False,
@@ -241,8 +300,9 @@ class AutoGrader:
             for r in self.results:
                 status = "✓" if r["success"] else "✗"
                 score_info = f" 评分: {r['score']}" if r["score"] else ""
+                correct_info = f" 答案: {r['correct_answer']}" if r.get("correct_answer") else ""
                 error_info = f" 错误: {r['error']}" if r["error"] else ""
-                print(f"  {status} 第 {r['page']} 页 ({r['question']}){score_info}{error_info}")
+                print(f"  {status} 第 {r['page']} 页 ({r['question']}){correct_info}{score_info}{error_info}")
 
         # 保存结果到文件
         self._save_results()
@@ -260,6 +320,7 @@ class AutoGrader:
         output = {
             "timestamp": datetime.now().isoformat(),
             "config": self.config.config_path,
+            "model_provider": self.config.model_provider,
             "total_pages": self.config.total_pages,
             "results": self.results
         }

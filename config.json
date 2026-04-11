@@ -4,21 +4,36 @@
   "delay_between_pages": 2.0,
   "delay_before_screenshot": 0.5,
   "screenshot_dir": "screenshots",
+  "model_provider": "dashscope",
+  "model_config": {
+    "dashscope": {
+      "model": "qwen3-vl-plus",
+      "enable_thinking": false,
+      "thinking_budget": 81920
+    },
+    "mock": {
+      "min_score": 60,
+      "max_score": 100
+    }
+  },
   "questions": [
     {
       "name": "单选题",
+      "correct_answer": "B",
       "screenshot_area": [100, 150, 800, 500],
       "input_box": [477, 300],
       "next_button": [700, 700]
     },
     {
       "name": "多选题",
+      "correct_answer": "ABC",
       "screenshot_area": [100, 150, 800, 550],
       "input_box": [477, 400],
       "next_button": [700, 750]
     },
     {
       "name": "填空题",
+      "correct_answer": "人工智能",
       "screenshot_area": [100, 150, 800, 400],
       "input_box": [477, 500],
       "next_button": [700, 600]

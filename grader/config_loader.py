@@ -4,7 +4,7 @@
 
 import json
 import os
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 
 
 class ConfigError(Exception):
@@ -18,6 +18,7 @@ class QuestionConfig:
     def __init__(self, data: Dict[str, Any], index: int):
         self.index = index
         self.name = data.get("name", f"题目{index + 1}")
+        self.correct_answer = data.get("correct_answer")
         self.screenshot_area = self._parse_screenshot_area(data.get("screenshot_area"))
         self.input_box = self._parse_coordinate(data.get("input_box"), "input_box")
         self.next_button = self._parse_coordinate(data.get("next_button"), "next_button")
@@ -57,7 +58,7 @@ class QuestionConfig:
         return (x, y)
 
     def __repr__(self):
-        return f"QuestionConfig({self.name}, screenshot={self.screenshot_area}, input={self.input_box}, next={self.next_button})"
+        return f"QuestionConfig({self.name}, correct={self.correct_answer}, screenshot={self.screenshot_area}, input={self.input_box}, next={self.next_button})"
 
 
 class GraderConfig:
@@ -72,6 +73,8 @@ class GraderConfig:
         self.delay_before_screenshot = self.data.get("delay_before_screenshot", 0.5)
         self.screenshot_dir = self._parse_screenshot_dir()
         self.questions = self._parse_questions()
+        self.model_provider = self._parse_model_provider()
+        self.model_config = self._parse_model_config()
 
     def _load_json(self) -> Dict[str, Any]:
         """加载 JSON 文件"""
@@ -149,6 +152,24 @@ class GraderConfig:
 
         return questions
 
+    def _parse_model_provider(self) -> str:
+        """解析模型提供商配置"""
+        provider = self.data.get("model_provider", "mock")
+
+        if not isinstance(provider, str):
+            raise ConfigError("'model_provider' 必须是字符串")
+
+        return provider.lower()
+
+    def _parse_model_config(self) -> Dict[str, Any]:
+        """解析模型配置"""
+        model_config = self.data.get("model_config", {})
+
+        if not isinstance(model_config, dict):
+            raise ConfigError("'model_config' 必须是对象")
+
+        return model_config
+
     def get_question_for_page(self, page_index: int) -> QuestionConfig:
         """
         根据页面索引获取对应的题目配置
@@ -156,6 +177,15 @@ class GraderConfig:
         """
         question_index = page_index % len(self.questions)
         return self.questions[question_index]
+
+    def get_scorer_config(self) -> Dict[str, Any]:
+        """
+        获取当前模型提供商的配置
+
+        Returns:
+            模型配置字典
+        """
+        return self.model_config.get(self.model_provider, {})
 
     def validate(self) -> bool:
         """验证配置是否完整有效"""
@@ -166,4 +196,4 @@ class GraderConfig:
         return True
 
     def __repr__(self):
-        return f"GraderConfig(pages={self.total_pages}, questions={len(self.questions)}, dir={self.screenshot_dir})"
+        return f"GraderConfig(pages={self.total_pages}, questions={len(self.questions)}, provider={self.model_provider}, dir={self.screenshot_dir})"
