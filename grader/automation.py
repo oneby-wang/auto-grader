@@ -164,9 +164,7 @@ class AutoGrader:
         self,
         page_index: int,
         question_index: int,
-        question: QuestionConfig,
-        is_last_question: bool,
-        is_last_page: bool
+        question: QuestionConfig
     ) -> dict:
         """
         处理单道题目
@@ -175,8 +173,6 @@ class AutoGrader:
             page_index: 当前页索引（从0开始）
             question_index: 当前题目索引（该页内的第几题，从0开始）
             question: 题目配置
-            is_last_question: 是否是该页的最后一题
-            is_last_page: 是否是最后一页
 
         Returns:
             处理结果字典
@@ -208,20 +204,6 @@ class AutoGrader:
             # 3. 输入评分
             self._input_score(question, score_result.score)
 
-            # 4. 判断点击哪个按钮
-            if not is_last_question:
-                # 不是最后一题，点击该题的下一题按钮
-                x, y = question.next_button
-                self._click_at(x, y, "下一题按钮")
-            elif is_last_page:
-                # 是最后一题且是最后一页，点击提交按钮
-                x, y = question.next_button
-                self._click_at(x, y, "提交按钮")
-            else:
-                # 是最后一题但不是最后一页，点击下一页按钮
-                x, y = question.next_button
-                self._click_at(x, y, "下一页按钮")
-
             result["success"] = True
             print(f"  ✓ 第 {question_index + 1} 题处理完成")
 
@@ -239,7 +221,8 @@ class AutoGrader:
         print("="*60)
         print(f"\n配置信息:")
         print(f"  总页面数: {self.config.total_pages}")
-        print(f"  题目配置数: {len(self.config.questions)}")
+        print(f"  每页题目数: {len(self.config.questions)}")
+        print(f"  下一页按钮: {self.config.next_button}")
         print(f"  模型提供商: {self.config.model_provider}")
         print(f"  页面间延迟: {self.config.delay_between_pages}秒")
         print(f"  截图保存目录: {self.config.screenshot_dir}")
@@ -263,9 +246,8 @@ class AutoGrader:
 
         print("\n开始执行!")
 
-        # 外层循环：遍历每一页
+       # 外层循环：遍历每一页
         for page_index in range(self.config.total_pages):
-            is_last_page = (page_index == self.config.total_pages - 1)
 
             print(f"\n{'='*50}")
             print(f"处理第 {page_index + 1}/{self.config.total_pages} 页")
@@ -273,15 +255,11 @@ class AutoGrader:
 
             # 内层循环：遍历该页的每道题目
             for question_index, question in enumerate(self.config.questions):
-                is_last_question = (question_index == len(self.config.questions) - 1)
-
                 try:
                     result = self.process_question(
                         page_index=page_index,
                         question_index=question_index,
-                        question=question,
-                        is_last_question=is_last_question,
-                        is_last_page=is_last_page
+                       question=question
                     )
                     self.results.append(result)
 
@@ -308,10 +286,8 @@ class AutoGrader:
                         print("用户取消，停止执行")
                         return  # 完全退出
 
-            # 该页所有题目处理完后，如果不是最后一页，等待加载
-            if not is_last_page:
-                print(f"\n  等待 {self.config.delay_between_pages} 秒加载下一页...")
-                time.sleep(self.config.delay_between_pages)
+            print(f"  等待 {self.config.delay_between_pages} 秒加载下一页...")
+            time.sleep(self.config.delay_between_pages)
 
         # 输出统计结果
         self._print_summary()

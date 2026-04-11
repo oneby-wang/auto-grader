@@ -220,7 +220,7 @@ class DashScopeScorer(BaseScorer):
 
             # 提取 AI 返回的完整内容
             response_content = completion.choices[0].message.content.strip()
-            print(f"  AI 原始响应: {response_content[:200]}...")  # 调试日志
+            print(f"  AI 原始响应: {response_content[:200]}")  # 调试日志
 
             # 尝试解析 JSON 格式
             import json
@@ -229,7 +229,7 @@ class DashScopeScorer(BaseScorer):
                 result_data = json.loads(response_content)
                 score = float(result_data.get("score", 0.0))
                 recognized_text = str(result_data.get("recognized_text", ""))
-                print(f"  JSON 解析成功: score={score}, recognized_text={recognized_text[:50]}...")
+                print(f"  JSON 解析成功: score={score}, recognized_text={recognized_text[:50]}")
                 return ScoreResult(score=score, recognized_text=recognized_text)
             except json.JSONDecodeError:
                 # 如果解析失败，尝试从 markdown 代码块中提取 JSON
@@ -262,7 +262,7 @@ class DashScopeScorer(BaseScorer):
                         pass
 
                 # 如果都无法解析，回退到原来的方式：提取数字
-                print(f"  JSON 解析失败，尝试提取数字...")
+                print(f"  JSON 解析失败，尝试提取数字")
                 numbers = re.findall(r'\d+\.?\d*', response_content)
                 if numbers:
                     score = float(numbers[0])

@@ -1,6 +1,7 @@
 {
   "_comment": "PyAutoGUI 自动化评分配置文件",
   "total_pages": 2,
+  "next_button": [700, 700],
   "delay_between_pages": 2.0,
   "delay_before_screenshot": 0.5,
   "screenshot_dir": "screenshots",
@@ -19,30 +20,27 @@
   "questions": [
     {
       "name": "单选题",
-      "correct_answer": "B",
+      "correct_answer": "A",
       "max_score": 100,
       "prompt": "你是一位专业的教师，需要对学生的答题情况进行评分。\n\n题目类型: {question_name}\n正确答案: {correct_answer}\n\n请查看图片中的学生答案，根据以下标准评分：\n- 如果学生答案与正确答案一致：满分 {max_score} 分\n- 如果部分正确：酌情给分（60-99 分）\n- 如果完全错误：0-59 分\n",
-      "screenshot_area": [984, 211, 1024, 294],
-      "input_box": [477, 300],
-      "next_button": [700, 700]
+      "screenshot_area": [609, 241, 666, 299],
+      "input_box": [477, 300]
     },
-    {
+   {
       "name": "多选题",
-      "correct_answer": "ABC",
+      "correct_answer": "auto",
       "max_score": 100,
       "prompt": "你是一位专业的教师，需要对学生的答题情况进行评分。\n\n题目类型: {question_name}\n正确答案: {correct_answer}\n\n请查看图片中的学生答案，根据以下标准评分：\n- 如果学生答案与正确答案一致：满分 {max_score} 分\n- 如果部分正确：酌情给分（60-99 分）\n- 如果完全错误：0-59 分\n",
-      "screenshot_area": [100, 150, 800, 550],
-      "input_box": [477, 400],
-      "next_button": [700, 750]
+      "screenshot_area": [647, 297, 732, 340],
+      "input_box": [477, 400]
     },
     {
       "name": "填空题",
-      "correct_answer": "人工智能",
+      "correct_answer": ".claude",
       "max_score": 100,
       "prompt": "你是一位专业的教师，需要对学生的答题情况进行评分。\n\n题目类型: {question_name}\n正确答案: {correct_answer}\n\n请查看图片中的学生答案，根据以下标准评分：\n- 如果学生答案与正确答案一致：满分 {max_score} 分\n- 如果部分正确：酌情给分（60-99 分）\n- 如果完全错误：0-59 分\n",
-      "screenshot_area": [100, 150, 800, 400],
-      "input_box": [477, 500],
-      "next_button": [700, 600]
+      "screenshot_area": [111, 148, 160, 168],
+      "input_box": [477, 500]
     }
   ]
 }

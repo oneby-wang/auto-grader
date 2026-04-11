@@ -23,7 +23,6 @@ class QuestionConfig:
         self.prompt = self._parse_prompt(data.get("prompt"))
         self.screenshot_area = self._parse_screenshot_area(data.get("screenshot_area"))
         self.input_box = self._parse_coordinate(data.get("input_box"), "input_box")
-        self.next_button = self._parse_coordinate(data.get("next_button"), "next_button")
 
     def _parse_prompt(self, prompt) -> str:
         """解析评分提示词 prompt（必填）"""
@@ -89,7 +88,7 @@ class QuestionConfig:
 
     def __repr__(self):
         prompt_info = ", has_custom_prompt" if self.prompt else ""
-        return f"QuestionConfig({self.name}, correct={self.correct_answer}, max_score={self.max_score}{prompt_info}, screenshot={self.screenshot_area}, input={self.input_box}, next={self.next_button})"
+        return f"QuestionConfig({self.name}, correct={self.correct_answer}, max_score={self.max_score}{prompt_info}, screenshot={self.screenshot_area}, input={self.input_box})"
 
 
 class GraderConfig:
@@ -104,6 +103,7 @@ class GraderConfig:
         self.delay_before_screenshot = self.data.get("delay_before_screenshot", 0.5)
         self.screenshot_dir = self._parse_screenshot_dir()
         self.questions = self._parse_questions()
+        self.next_button = self._parse_next_button()
         self.model_provider = self._parse_model_provider()
         self.model_config = self._parse_model_config()
 
@@ -182,6 +182,25 @@ class GraderConfig:
             questions.append(QuestionConfig(q_data, i))
 
         return questions
+
+    def _parse_next_button(self) -> Tuple[int, int]:
+        """解析下一页按钮坐标"""
+        next_button = self.data.get("next_button")
+        if not next_button:
+            raise ConfigError("配置文件中缺少 'next_button' 字段")
+
+        if not isinstance(next_button, (list, tuple)) or len(next_button) != 2:
+            raise ConfigError("'next_button' 必须是包含2个元素的列表 [x, y]")
+
+        try:
+            x, y = map(int, next_button)
+        except (ValueError, TypeError):
+            raise ConfigError("'next_button' 坐标必须是整数")
+
+        if x < 0 or y < 0:
+            raise ConfigError("'next_button' 坐标不能为负数")
+
+        return (x, y)
 
     def _parse_model_provider(self) -> str:
         """解析模型提供商配置"""
