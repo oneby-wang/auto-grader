@@ -19,9 +19,39 @@ class QuestionConfig:
         self.index = index
         self.name = data.get("name", f"题目{index + 1}")
         self.correct_answer = data.get("correct_answer")
+        self.max_score = self._parse_max_score(data.get("max_score"))
+        self.prompt = self._parse_prompt(data.get("prompt"))
         self.screenshot_area = self._parse_screenshot_area(data.get("screenshot_area"))
         self.input_box = self._parse_coordinate(data.get("input_box"), "input_box")
         self.next_button = self._parse_coordinate(data.get("next_button"), "next_button")
+
+    def _parse_prompt(self, prompt) -> str:
+        """解析评分提示词 prompt（必填）"""
+        if prompt is None:
+            raise ConfigError(f"题目 '{self.name}' 缺少必填字段 'prompt'")
+
+        if not isinstance(prompt, str):
+            raise ConfigError(f"题目 '{self.name}' 的 'prompt' 必须是字符串")
+
+        if not prompt.strip():
+            raise ConfigError(f"题目 '{self.name}' 的 'prompt' 不能为空字符串")
+
+        return prompt
+
+    def _parse_max_score(self, max_score) -> int:
+        """解析满分值 max_score（必填）"""
+        if max_score is None:
+            raise ConfigError(f"题目 '{self.name}' 缺少必填字段 'max_score'")
+
+        try:
+            max_score = int(max_score)
+        except (ValueError, TypeError):
+            raise ConfigError(f"题目 '{self.name}' 的 'max_score' 必须是整数")
+
+        if max_score <= 0:
+            raise ConfigError(f"题目 '{self.name}' 的 'max_score' 必须是正整数")
+
+        return max_score
 
     def _parse_screenshot_area(self, area) -> Tuple[int, int, int, int]:
         """解析截图区域坐标 [x1, y1, x2, y2] -> (x, y, width, height)"""
@@ -58,7 +88,8 @@ class QuestionConfig:
         return (x, y)
 
     def __repr__(self):
-        return f"QuestionConfig({self.name}, correct={self.correct_answer}, screenshot={self.screenshot_area}, input={self.input_box}, next={self.next_button})"
+        prompt_info = ", has_custom_prompt" if self.prompt else ""
+        return f"QuestionConfig({self.name}, correct={self.correct_answer}, max_score={self.max_score}{prompt_info}, screenshot={self.screenshot_area}, input={self.input_box}, next={self.next_button})"
 
 
 class GraderConfig:

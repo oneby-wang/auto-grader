@@ -127,16 +127,20 @@ class AutoGrader:
         """对截图进行评分"""
         print(f"  调用评分模型...")
         print(f"  题目: {question.name}")
+        print(f"  满分值: {question.max_score}")
         if question.correct_answer:
             print(f"  正确答案: {question.correct_answer}")
+        print(f"  使用配置的评分提示词")
 
         try:
             score = self.scorer.score(
                 image_path=screenshot_path,
                 question_name=question.name,
-                correct_answer=question.correct_answer
+                correct_answer=question.correct_answer,
+                max_score=question.max_score,
+                prompt_template=question.prompt
             )
-            score = validate_score(score)
+            score = validate_score(score, max_score=question.max_score)
             print(f"  获得评分: {score}")
             return score
         except Exception as e:
@@ -145,7 +149,9 @@ class AutoGrader:
             score = score_image_with_retry(
                 screenshot_path,
                 question_name=question.name,
-                correct_answer=question.correct_answer
+                correct_answer=question.correct_answer,
+                max_score=question.max_score,
+                prompt_template=question.prompt
             )
             return score
 

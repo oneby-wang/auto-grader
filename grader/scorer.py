@@ -30,7 +30,8 @@ class BaseScorer(ABC):
     """
 
     @abstractmethod
-    def score(self, image_path: str, question_name: str, correct_answer: Optional[str]) -> str:
+    def score(self, image_path: str, question_name: str, correct_answer: Optional[str],
+              max_score: int, prompt_template: str) -> str:
         """
         对截图进行评分
 
@@ -38,6 +39,8 @@ class BaseScorer(ABC):
             image_path: 截图文件路径
             question_name: 题目名称
             correct_answer: 正确答案（可选）
+            max_score: 该题目的满分值
+            prompt_template: 评分提示词模板（从配置读取）
 
         Returns:
             评分结果字符串（如 "90"）
@@ -69,32 +72,27 @@ class BaseScorer(ABC):
         except Exception as e:
             raise ScorerError(f"读取图片文件失败: {e}")
 
-    def _build_prompt(self, question_name: str, correct_answer: Optional[str]) -> str:
+    def _build_prompt(self, question_name: str, correct_answer: Optional[str],
+                      max_score: int, prompt_template: str) -> str:
         """
         构建评分提示词
 
         Args:
             question_name: 题目名称
             correct_answer: 正确答案
+            max_score: 该题目的满分值
+            prompt_template: 评分提示词模板（从配置读取）
 
         Returns:
             完整的提示词字符串
         """
-        prompt = f"""你是一位专业的教师，需要对学生的答题情况进行评分。
-
-题目类型: {question_name}
-"""
+        prompt = prompt_template
+        prompt = prompt.replace("{question_name}", question_name)
+        prompt = prompt.replace("{max_score}", str(max_score))
         if correct_answer:
-            prompt += f"正确答案: {correct_answer}\n"
-
-        prompt += """
-请查看图片中的学生答案，根据以下标准评分：
-- 如果学生答案与正确答案一致：满分 100 分
-- 如果部分正确：酌情给分（60-99 分）
-- 如果完全错误：0-59 分
-
-请只返回一个数字分数（0-100），不要有任何其他文字说明。"""
-
+            prompt = prompt.replace("{correct_answer}", correct_answer)
+        else:
+            prompt = prompt.replace("{correct_answer}", "未提供")
         return prompt
 
 
@@ -144,7 +142,8 @@ class DashScopeScorer(BaseScorer):
         self.enable_thinking = self.config.get("enable_thinking", False)
         self.thinking_budget = self.config.get("thinking_budget", 81920)
 
-    def score(self, image_path: str, question_name: str, correct_answer: Optional[str]) -> str:
+    def score(self, image_path: str, question_name: str, correct_answer: Optional[str],
+              max_score: int, prompt_template: str) -> str:
         """
         调用阿里百炼模型对截图进行评分
 
@@ -152,6 +151,8 @@ class DashScopeScorer(BaseScorer):
             image_path: 截图文件路径
             question_name: 题目名称
             correct_answer: 正确答案
+            max_score: 该题目的满分值
+            prompt_template: 评分提示词模板（从配置读取）
         Returns:
             评分结果字符串
         """
@@ -159,7 +160,7 @@ class DashScopeScorer(BaseScorer):
         base64_image = self._encode_image(image_path)
 
         # 构建提示词
-        prompt = self._build_prompt(question_name, correct_answer)
+        prompt = self._build_prompt(question_name, correct_answer, max_score, prompt_template)
 
         # 构建请求参数
         messages = [{
@@ -194,7 +195,7 @@ class DashScopeScorer(BaseScorer):
             result = completion.choices[0].message.content.strip()
 
             # 从结果中提取数字
-            numbers = re.findall(r'\d+', result)
+           numbers = re.findall(r'\d+', result)
             if numbers:
                 return numbers[0]
 
@@ -217,12 +218,24 @@ class MockScorer(BaseScorer):
         self.min_score = self.config.get("min_score", 60)
         self.max_score = self.config.get("max_score", 100)
 
-    def score(self, image_path: str, question_name: str, correct_answer: Optional[str]) -> str:
-        """返回随机评分"""
+    def score(self, image_path: str, question_name: str, correct_answer: Optional[str],
+              max_score: int, prompt_template: str) -> str:
+        """
+        返回随机评分
+
+        Args:
+            image_path: 截图文件路径
+            question_name: 题目名称
+            correct_answer: 正确答案
+            max_score: 该题目的满分值
+            prompt_template: 评分提示词模板（从配置读取）
+        """
         if not os.path.exists(image_path):
             raise ScorerError(f"截图文件不存在: {image_path}")
 
-        mock_score = random.randint(self.min_score, self.max_score)
+        # 根据 max_score 调整随机分数范围
+        min_score = int(max_score * 0.6)
+        mock_score = random.randint(min_score, max_score)
         return str(mock_score)
 
 
@@ -288,16 +301,19 @@ def set_default_scorer(scorer: BaseScorer) -> None:
     _default_scorer = scorer
 
 
-def score_image(image_path: str, question_name: str = "题目", correct_answer: Optional[str] = None) -> str:
+def score_image(image_path: str, question_name: str, correct_answer: Optional[str],
+                max_score: int, prompt_template: str) -> str:
     """
-    对截图进行评分（兼容旧接口）
+    对截图进行评分
 
     如果未设置默认评分器，则使用 MockScorer。
 
     Args:
         image_path: 截图文件路径
         question_name: 题目名称
-        correct_answer: 正确答案
+        correct_answer: 正确答案（可选）
+        max_score: 该题目的满分值
+        prompt_template: 评分提示词模板（从配置读取）
 
     Returns:
         评分结果字符串
@@ -307,23 +323,27 @@ def score_image(image_path: str, question_name: str = "题目", correct_answer: 
     if _default_scorer is None:
         _default_scorer = MockScorer()
 
-    return _default_scorer.score(image_path, question_name, correct_answer)
+    return _default_scorer.score(image_path, question_name, correct_answer, max_score, prompt_template)
 
 
 def score_image_with_retry(
     image_path: str,
-    question_name: str = "题目",
-    correct_answer: Optional[str] = None,
+    question_name: str,
+    correct_answer: Optional[str],
+    max_score: int,
+    prompt_template: str,
     max_retries: int = 3,
     default_score: str = "80"
 ) -> str:
     """
-    带重试机制的评分函数（兼容旧接口）
+    带重试机制的评分函数
 
     Args:
         image_path: 截图文件路径
         question_name: 题目名称
-        correct_answer: 正确答案
+        correct_answer: 正确答案（可选）
+        max_score: 该题目的满分值
+        prompt_template: 评分提示词模板（从配置读取）
         max_retries: 最大重试次数
         default_score: 评分失败时的默认分数
 
@@ -333,7 +353,7 @@ def score_image_with_retry(
     last_error = None
     for attempt in range(max_retries):
         try:
-            score = score_image(image_path, question_name, correct_answer)
+            score = score_image(image_path, question_name, correct_answer, max_score, prompt_template)
             return score
         except ScorerError as e:
             last_error = e
