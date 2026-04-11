@@ -14,7 +14,15 @@ import random
 import re
 import time
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Optional, Dict, Any
+
+
+@dataclass
+class ScoreResult:
+    """评分结果数据类"""
+    score: float
+    recognized_text: str = ""
 
 
 class ScorerError(Exception):
@@ -31,7 +39,7 @@ class BaseScorer(ABC):
 
     @abstractmethod
     def score(self, image_path: str, question_name: str, correct_answer: Optional[str],
-              max_score: int, prompt_template: str) -> str:
+              max_score: int, prompt_template: str) -> ScoreResult:
         """
         对截图进行评分
 
@@ -43,7 +51,7 @@ class BaseScorer(ABC):
             prompt_template: 评分提示词模板（从配置读取）
 
         Returns:
-            评分结果字符串（如 "90"）
+            ScoreResult 对象，包含 score 和 recognized_text
 
         Raises:
             ScorerError: 评分失败时抛出
@@ -93,6 +101,25 @@ class BaseScorer(ABC):
             prompt = prompt.replace("{correct_answer}", correct_answer)
         else:
             prompt = prompt.replace("{correct_answer}", "未提供")
+
+        # 追加结构化输出要求
+        structured_output = """
+
+【重要】你必须按以下步骤处理：
+1. 首先识别图片中的学生答案文本内容
+2. 然后根据评分标准给出分数
+3. 最后严格按照以下 JSON 格式返回结果（不要添加 markdown 代码块标记）：
+
+{
+    "recognized_text": "图片中识别到的学生答案文本",
+    "score": 85.5
+}
+
+字段说明：
+- recognized_text: 从图片中识别出的学生答案文本（必须真实识别，不能为空）
+- score: 评分结果，支持 0.5 分为最小单位的小数
+"""
+        prompt += structured_output
         return prompt
 
 
@@ -143,7 +170,7 @@ class DashScopeScorer(BaseScorer):
         self.thinking_budget = self.config.get("thinking_budget", 81920)
 
     def score(self, image_path: str, question_name: str, correct_answer: Optional[str],
-              max_score: int, prompt_template: str) -> str:
+              max_score: int, prompt_template: str) -> ScoreResult:
         """
         调用阿里百炼模型对截图进行评分
 
@@ -154,7 +181,7 @@ class DashScopeScorer(BaseScorer):
             max_score: 该题目的满分值
             prompt_template: 评分提示词模板（从配置读取）
         Returns:
-            评分结果字符串
+            ScoreResult 对象，包含 score 和 recognized_text
         """
         # 编码图片
         base64_image = self._encode_image(image_path)
@@ -191,16 +218,57 @@ class DashScopeScorer(BaseScorer):
                 extra_body=extra_body if extra_body else None
             )
 
-            # 提取评分结果
-            result = completion.choices[0].message.content.strip()
+            # 提取 AI 返回的完整内容
+            response_content = completion.choices[0].message.content.strip()
+            print(f"  AI 原始响应: {response_content[:200]}...")  # 调试日志
 
-            # 从结果中提取数字
-            numbers = re.findall(r'\d+', result)
-            if numbers:
-                return numbers[0]
+            # 尝试解析 JSON 格式
+            import json
+            try:
+                # 尝试直接解析 JSON
+                result_data = json.loads(response_content)
+                score = float(result_data.get("score", 0.0))
+                recognized_text = str(result_data.get("recognized_text", ""))
+                print(f"  JSON 解析成功: score={score}, recognized_text={recognized_text[:50]}...")
+                return ScoreResult(score=score, recognized_text=recognized_text)
+            except json.JSONDecodeError:
+                # 如果解析失败，尝试从 markdown 代码块中提取 JSON
+                # 匹配 ```json ... ``` 或 ``` ... ``` 格式
+                json_match = re.search(r'```(?:json)?\s*\n?({.*?})\s*```', response_content, re.DOTALL)
+                if not json_match:
+                    # 尝试匹配多行代码块
+                    json_match = re.search(r'```(?:json)?\s*\n?(\{[\s\S]*?\})\s*```', response_content)
+                if json_match:
+                    try:
+                        result_data = json.loads(json_match.group(1))
+                        score = float(result_data.get("score", 0.0))
+                        recognized_text = str(result_data.get("recognized_text", ""))
+                        print(f"  代码块 JSON 解析成功: score={score}")
+                        return ScoreResult(score=score, recognized_text=recognized_text)
+                    except (json.JSONDecodeError, ValueError) as e:
+                        print(f"  代码块 JSON 解析失败: {e}")
+                        pass
 
-            # 如果没有提取到数字，返回原结果
-            return result
+                # 如果都无法解析，尝试在整个响应中找 JSON 对象
+                json_pattern = re.search(r'(\{[^{}]*"recognized_text"[^{}]*"score"[^{}]*\})', response_content, re.DOTALL)
+                if json_pattern:
+                    try:
+                        result_data = json.loads(json_pattern.group(1))
+                        score = float(result_data.get("score", 0.0))
+                        recognized_text = str(result_data.get("recognized_text", ""))
+                        print(f"  正则提取 JSON 成功: score={score}")
+                        return ScoreResult(score=score, recognized_text=recognized_text)
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+
+                # 如果都无法解析，回退到原来的方式：提取数字
+                print(f"  JSON 解析失败，尝试提取数字...")
+                numbers = re.findall(r'\d+\.?\d*', response_content)
+                if numbers:
+                    score = float(numbers[0])
+                else:
+                    score = 0.0
+                return ScoreResult(score=score, recognized_text=response_content)
 
         except Exception as e:
             raise ScorerError(f"阿里百炼 API 调用失败: {e}")
@@ -219,7 +287,7 @@ class MockScorer(BaseScorer):
         self.max_score = self.config.get("max_score", 100)
 
     def score(self, image_path: str, question_name: str, correct_answer: Optional[str],
-              max_score: int, prompt_template: str) -> str:
+              max_score: int, prompt_template: str) -> ScoreResult:
         """
         返回随机评分
 
@@ -229,14 +297,19 @@ class MockScorer(BaseScorer):
             correct_answer: 正确答案
             max_score: 该题目的满分值
             prompt_template: 评分提示词模板（从配置读取）
+
+        Returns:
+            ScoreResult 对象，包含 score 和 recognized_text
         """
         if not os.path.exists(image_path):
             raise ScorerError(f"截图文件不存在: {image_path}")
 
         # 根据 max_score 调整随机分数范围
         min_score = int(max_score * 0.6)
-        mock_score = random.randint(min_score, max_score)
-        return str(mock_score)
+        mock_score = float(random.randint(min_score, max_score))
+        recognized_text = f"[Mock] 模拟识别的文本内容，评分: {mock_score}"
+
+        return ScoreResult(score=mock_score, recognized_text=recognized_text)
 
 
 class ScorerFactory:
@@ -302,7 +375,7 @@ def set_default_scorer(scorer: BaseScorer) -> None:
 
 
 def score_image(image_path: str, question_name: str, correct_answer: Optional[str],
-                max_score: int, prompt_template: str) -> str:
+                max_score: int, prompt_template: str) -> ScoreResult:
     """
     对截图进行评分
 
@@ -316,7 +389,7 @@ def score_image(image_path: str, question_name: str, correct_answer: Optional[st
         prompt_template: 评分提示词模板（从配置读取）
 
     Returns:
-        评分结果字符串
+        ScoreResult 对象
     """
     global _default_scorer
 
@@ -333,8 +406,8 @@ def score_image_with_retry(
     max_score: int,
     prompt_template: str,
     max_retries: int = 3,
-    default_score: str = "0"
-) -> str:
+    default_score: float = 0.0
+) -> ScoreResult:
     """
     带重试机制的评分函数
 
@@ -348,13 +421,13 @@ def score_image_with_retry(
         default_score: 评分失败时的默认分数
 
     Returns:
-        评分结果字符串
+        ScoreResult 对象
     """
     last_error = None
     for attempt in range(max_retries):
         try:
-            score = score_image(image_path, question_name, correct_answer, max_score, prompt_template)
-            return score
+            result = score_image(image_path, question_name, correct_answer, max_score, prompt_template)
+            return result
         except ScorerError as e:
             last_error = e
             if attempt < max_retries - 1:
@@ -363,32 +436,23 @@ def score_image_with_retry(
 
     # 所有重试都失败，返回默认分数并记录错误
     print(f"警告: 评分失败 ({last_error})，使用默认分数: {default_score}")
-    return default_score
+    return ScoreResult(score=default_score, recognized_text=f"[Error] 评分失败: {last_error}")
 
 
-def validate_score(score: str, min_score: int = 0, max_score: int = 100) -> str:
+def validate_score(result: ScoreResult, min_score: float = 0, max_score: float = 100) -> ScoreResult:
     """
     验证并格式化评分结果
 
     Args:
-        score: 原始评分字符串
+        result: ScoreResult 对象
         min_score: 最小有效分数
         max_score: 最大有效分数
 
     Returns:
-        验证后的评分字符串
+        验证后的 ScoreResult 对象
     """
-    # 尝试提取数字
-    numbers = re.findall(r'\d+', score)
+    # 限制 score 在有效范围内
+    validated_score = max(min_score, min(max_score, result.score))
 
-    if numbers:
-        try:
-            num_score = int(numbers[0])
-            # 限制在有效范围内
-            num_score = max(min_score, min(max_score, num_score))
-            return str(num_score)
-        except ValueError:
-            pass
-
-    # 如果不是数字，直接返回原字符串（可能是等级制如 A/B/C）
-    return score.strip()
+    # 返回新的 ScoreResult，保持 recognized_text 不变
+    return ScoreResult(score=validated_score, recognized_text=result.recognized_text)

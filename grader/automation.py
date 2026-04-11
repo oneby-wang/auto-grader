@@ -16,7 +16,7 @@ except ImportError:
 from .config_loader import GraderConfig, QuestionConfig
 from .screenshot import take_screenshot_safe
 from .scorer import (
-    ScorerFactory, BaseScorer,
+    ScorerFactory, BaseScorer, ScoreResult,
     score_image_with_retry, validate_score,
     set_default_scorer
 )
@@ -123,7 +123,7 @@ class AutoGrader:
         print(f"  截图保存: {screenshot_path}")
         return screenshot_path
 
-    def _score_screenshot(self, screenshot_path: str, question: QuestionConfig) -> str:
+    def _score_screenshot(self, screenshot_path: str, question: QuestionConfig) -> ScoreResult:
         """对截图进行评分"""
         print(f"  调用评分模型...")
         print(f"  题目: {question.name}")
@@ -133,62 +133,64 @@ class AutoGrader:
         print(f"  使用配置的评分提示词")
 
         try:
-            score = self.scorer.score(
+            result = self.scorer.score(
                 image_path=screenshot_path,
                 question_name=question.name,
                 correct_answer=question.correct_answer,
                 max_score=question.max_score,
                 prompt_template=question.prompt
             )
-            score = validate_score(score, max_score=question.max_score)
-            print(f"  获得评分: {score}")
-            return score
+            result = validate_score(result, max_score=question.max_score)
+            print(f"  获得评分: {result.score}")
+            return result
         except Exception as e:
             print(f"  评分出错: {e}")
             # 使用带重试的兼容接口
-            score = score_image_with_retry(
+            result = score_image_with_retry(
                 screenshot_path,
                 question_name=question.name,
                 correct_answer=question.correct_answer,
                 max_score=question.max_score,
                 prompt_template=question.prompt
             )
-            return score
+            return result
 
-    def _input_score(self, question: QuestionConfig, score: str) -> None:
+    def _input_score(self, question: QuestionConfig, score: float) -> None:
         """在指定输入框输入评分"""
         x, y = question.input_box
-        self._input_text(x, y, score, f"'{question.name}' 评分输入框")
+        self._input_text(x, y, str(score), f"'{question.name}' 评分输入框")
 
-    def _click_next_button(self, question: QuestionConfig, is_last_page: bool) -> None:
-        """点击下一题/提交按钮"""
-        x, y = question.next_button
-        button_name = "提交按钮" if is_last_page else "下一题按钮"
-        self._click_at(x, y, button_name)
-
-    def process_page(self, page_index: int, question: QuestionConfig) -> dict:
+    def process_question(
+        self,
+        page_index: int,
+        question_index: int,
+        question: QuestionConfig,
+        is_last_question: bool,
+        is_last_page: bool
+    ) -> dict:
         """
-        处理单个页面
+        处理单道题目
 
         Args:
-            page_index: 当前页面索引（从0开始）
+            page_index: 当前页索引（从0开始）
+            question_index: 当前题目索引（该页内的第几题，从0开始）
             question: 题目配置
+            is_last_question: 是否是该页的最后一题
+            is_last_page: 是否是最后一页
 
         Returns:
             处理结果字典
         """
-        is_last_page = (page_index == self.config.total_pages - 1)
-
-        print(f"\n{'='*50}")
-        print(f"处理第 {page_index + 1}/{self.config.total_pages} 页: {question.name}")
-        print(f"{'='*50}")
+        print(f"\n  处理第 {question_index + 1}/{len(self.config.questions)} 题: {question.name}")
 
         result = {
             "page": page_index + 1,
+            "question_index": question_index + 1,
             "question": question.name,
             "correct_answer": question.correct_answer,
             "screenshot": None,
             "score": None,
+            "recognized_text": None,
             "success": False,
             "error": None
         }
@@ -199,21 +201,33 @@ class AutoGrader:
             result["screenshot"] = screenshot_path
 
             # 2. 评分（调用模型）
-            score = self._score_screenshot(screenshot_path, question)
-            result["score"] = score
+            score_result = self._score_screenshot(screenshot_path, question)
+            result["score"] = score_result.score
+            result["recognized_text"] = score_result.recognized_text
 
             # 3. 输入评分
-            self._input_score(question, score)
+            self._input_score(question, score_result.score)
 
-            # 4. 点击下一题/提交
-            self._click_next_button(question, is_last_page)
+            # 4. 判断点击哪个按钮
+            if not is_last_question:
+                # 不是最后一题，点击该题的下一题按钮
+                x, y = question.next_button
+                self._click_at(x, y, "下一题按钮")
+            elif is_last_page:
+                # 是最后一题且是最后一页，点击提交按钮
+                x, y = question.next_button
+                self._click_at(x, y, "提交按钮")
+            else:
+                # 是最后一题但不是最后一页，点击下一页按钮
+                x, y = question.next_button
+                self._click_at(x, y, "下一页按钮")
 
             result["success"] = True
-            print(f"✓ 第 {page_index + 1} 页处理完成")
+            print(f"  ✓ 第 {question_index + 1} 题处理完成")
 
         except Exception as e:
             result["error"] = str(e)
-            print(f"✗ 第 {page_index + 1} 页处理失败: {e}")
+            print(f"  ✗ 第 {question_index + 1} 题处理失败: {e}")
             raise
 
         return result
@@ -249,40 +263,55 @@ class AutoGrader:
 
         print("\n开始执行!")
 
-        # 主循环
+        # 外层循环：遍历每一页
         for page_index in range(self.config.total_pages):
-            # 获取当前页面使用的题目配置
-            question = self.config.get_question_for_page(page_index)
+            is_last_page = (page_index == self.config.total_pages - 1)
 
-            try:
-                result = self.process_page(page_index, question)
-                self.results.append(result)
+            print(f"\n{'='*50}")
+            print(f"处理第 {page_index + 1}/{self.config.total_pages} 页")
+            print(f"{'='*50}")
 
-                # 如果不是最后一页，等待页面加载
-                if page_index < self.config.total_pages - 1:
-                    print(f"  等待 {self.config.delay_between_pages} 秒加载下一页...")
-                    time.sleep(self.config.delay_between_pages)
+            # 内层循环：遍历该页的每道题目
+            for question_index, question in enumerate(self.config.questions):
+                is_last_question = (question_index == len(self.config.questions) - 1)
 
-            except Exception as e:
-                # 记录失败结果
-                self.results.append({
-                    "page": page_index + 1,
-                    "question": question.name,
-                    "correct_answer": question.correct_answer,
-                    "screenshot": None,
-                    "score": None,
-                    "success": False,
-                    "error": str(e)
-                })
+                try:
+                    result = self.process_question(
+                        page_index=page_index,
+                        question_index=question_index,
+                        question=question,
+                        is_last_question=is_last_question,
+                        is_last_page=is_last_page
+                    )
+                    self.results.append(result)
 
-                print(f"\n错误: 处理第 {page_index + 1} 页时发生异常")
-                print(f"异常信息: {e}")
+                except Exception as e:
+                    # 记录失败结果
+                    self.results.append({
+                        "page": page_index + 1,
+                        "question_index": question_index + 1,
+                        "question": question.name,
+                        "correct_answer": question.correct_answer,
+                        "screenshot": None,
+                        "score": None,
+                        "recognized_text": None,
+                        "success": False,
+                        "error": str(e)
+                    })
 
-                # 询问是否继续
-                response = input("是否继续处理下一页? (y/n): ").strip().lower()
-                if response not in ('y', 'yes', '是'):
-                    print("用户取消，停止执行")
-                    break
+                    print(f"\n错误: 处理第 {page_index + 1} 页第 {question_index + 1} 题时发生异常")
+                    print(f"异常信息: {e}")
+
+                    # 询问是否继续
+                    response = input("是否继续处理下一题? (y/n): ").strip().lower()
+                    if response not in ('y', 'yes', '是'):
+                        print("用户取消，停止执行")
+                        return  # 完全退出
+
+            # 该页所有题目处理完后，如果不是最后一页，等待加载
+            if not is_last_page:
+                print(f"\n  等待 {self.config.delay_between_pages} 秒加载下一页...")
+                time.sleep(self.config.delay_between_pages)
 
         # 输出统计结果
         self._print_summary()
@@ -305,10 +334,11 @@ class AutoGrader:
             print(f"\n详细结果:")
             for r in self.results:
                 status = "✓" if r["success"] else "✗"
-                score_info = f" 评分: {r['score']}" if r["score"] else ""
+                score_info = f" 评分: {r['score']}" if r["score"] is not None else ""
                 correct_info = f" 答案: {r['correct_answer']}" if r.get("correct_answer") else ""
                 error_info = f" 错误: {r['error']}" if r["error"] else ""
-                print(f"  {status} 第 {r['page']} 页 ({r['question']}){correct_info}{score_info}{error_info}")
+                q_index = r.get('question_index', '?')
+                print(f"  {status} 第 {r['page']} 页 第 {q_index} 题 ({r['question']}){correct_info}{score_info}{error_info}")
 
         # 保存结果到文件
         self._save_results()
@@ -328,6 +358,8 @@ class AutoGrader:
             "config": self.config.config_path,
             "model_provider": self.config.model_provider,
             "total_pages": self.config.total_pages,
+            "questions_per_page": len(self.config.questions),
+            "total_questions": len(self.results),
             "results": self.results
         }
 

@@ -4,7 +4,7 @@
 
 import json
 import os
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Tuple
 
 
 class ConfigError(Exception):
@@ -200,14 +200,6 @@ class GraderConfig:
             raise ConfigError("'model_config' 必须是对象")
 
         return model_config
-
-    def get_question_for_page(self, page_index: int) -> QuestionConfig:
-        """
-        根据页面索引获取对应的题目配置
-        如果题目数量少于页面数，则循环使用题目配置
-        """
-        question_index = page_index % len(self.questions)
-        return self.questions[question_index]
 
     def get_scorer_config(self) -> Dict[str, Any]:
         """
