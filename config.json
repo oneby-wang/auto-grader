@@ -1,0 +1,27 @@
+{
+  "_comment": "PyAutoGUI 自动化评分配置文件",
+  "total_pages": 5,
+  "delay_between_pages": 2.0,
+  "delay_before_screenshot": 0.5,
+  "screenshot_dir": "screenshots",
+  "questions": [
+    {
+      "name": "单选题",
+      "screenshot_area": [100, 150, 800, 500],
+      "input_box": [477, 300],
+      "next_button": [700, 700]
+    },
+    {
+      "name": "多选题",
+      "screenshot_area": [100, 150, 800, 550],
+      "input_box": [477, 400],
+      "next_button": [700, 750]
+    },
+    {
+      "name": "填空题",
+      "screenshot_area": [100, 150, 800, 400],
+      "input_box": [477, 500],
+      "next_button": [700, 600]
+    }
+  ]
+}
