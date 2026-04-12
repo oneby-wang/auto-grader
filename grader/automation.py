@@ -3,6 +3,7 @@
 """
 
 import os
+import platform
 import time
 
 try:
@@ -89,8 +90,9 @@ class AutoGrader:
         # 先点击输入框
         self._click_at(x, y, description)
 
-        # 清除已有内容 (Ctrl+A 全选，然后 Delete 删除)
-        pyautogui.hotkey('ctrl', 'a')
+        # 清除已有内容 (Mac 用 Command+A，其他用 Ctrl+A 全选，然后 Delete 删除)
+        select_key = 'command' if platform.system() == 'Darwin' else 'ctrl'
+        pyautogui.hotkey(select_key, 'a')
         pyautogui.press('delete')
 
         # 输入文本
