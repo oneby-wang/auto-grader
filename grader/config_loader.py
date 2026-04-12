@@ -4,7 +4,7 @@
 
 import json
 import os
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 
 
 class ConfigError(Exception):
@@ -12,10 +12,24 @@ class ConfigError(Exception):
     pass
 
 
+class ArbitrationConfig:
+    """仲裁配置"""
+
+    def __init__(self, data: Dict[str, Any]):
+        self.score_diff_threshold = data.get("score_diff_threshold", 10.0)
+        self.strategy = data.get("strategy", "avg")
+
+        if self.strategy not in ("max", "min", "avg"):
+            raise ConfigError(f"仲裁策略 '{self.strategy}' 无效，必须是 'max'、'min' 或 'avg'")
+
+    def __repr__(self):
+        return f"ArbitrationConfig(threshold={self.score_diff_threshold}, strategy={self.strategy})"
+
+
 class QuestionConfig:
     """单个题目的配置"""
 
-    def __init__(self, data: Dict[str, Any], index: int):
+    def __init__(self, data: Dict[str, Any], index: int, is_multi_model: bool = False):
         self.index = index
         self.name = data.get("name", f"题目{index + 1}")
         self.correct_answer = data.get("correct_answer")
@@ -23,6 +37,7 @@ class QuestionConfig:
         self.prompt = self._parse_prompt(data.get("prompt"))
         self.screenshot_area = self._parse_screenshot_area(data.get("screenshot_area"))
         self.input_box = self._parse_coordinate(data.get("input_box"), "input_box")
+        self.arbitration = self._parse_arbitration(data.get("arbitration"), is_multi_model)
 
     def _parse_prompt(self, prompt) -> str:
         """解析评分提示词 prompt（必填）"""
@@ -86,6 +101,23 @@ class QuestionConfig:
 
         return (x, y)
 
+    def _parse_arbitration(self, arbitration_data, is_multi_model: bool) -> Optional[ArbitrationConfig]:
+        """解析仲裁配置"""
+        if not is_multi_model:
+            # 单模型时，仲裁配置可选
+            if arbitration_data:
+                return ArbitrationConfig(arbitration_data)
+            return None
+
+        # 多模型时，仲裁配置必填
+        if not arbitration_data:
+            raise ConfigError(f"题目 '{self.name}' 配置了多个模型，必须配置 'arbitration' 字段")
+
+        if not isinstance(arbitration_data, dict):
+            raise ConfigError(f"题目 '{self.name}' 的 'arbitration' 必须是对象")
+
+        return ArbitrationConfig(arbitration_data)
+
     def __repr__(self):
         prompt_info = ", has_custom_prompt" if self.prompt else ""
         return f"QuestionConfig({self.name}, correct={self.correct_answer}, max_score={self.max_score}{prompt_info}, screenshot={self.screenshot_area}, input={self.input_box})"
@@ -102,10 +134,11 @@ class GraderConfig:
         self.delay_between_pages = self._parse_delay()
         self.delay_before_screenshot = self.data.get("delay_before_screenshot", 0.5)
         self.screenshot_dir = self._parse_screenshot_dir()
+        self.next_button = self._parse_next_button()
+        self.model_providers = self._parse_model_providers()
+        self.model_config = self._parse_model_config()
         self.questions = self._parse_questions()
         self.next_button = self._parse_next_button()
-        self.model_provider = self._parse_model_provider()
-        self.model_config = self._parse_model_config()
 
     def _load_json(self) -> Dict[str, Any]:
         """加载 JSON 文件"""
@@ -175,11 +208,13 @@ class GraderConfig:
         if len(questions_data) == 0:
             raise ConfigError("'questions' 列表不能为空")
 
+        is_multi_model = len(self.model_providers) > 1
+
         questions = []
         for i, q_data in enumerate(questions_data):
             if not isinstance(q_data, dict):
                 raise ConfigError(f"questions[{i}] 必须是对象")
-            questions.append(QuestionConfig(q_data, i))
+            questions.append(QuestionConfig(q_data, i, is_multi_model))
 
         return questions
 
@@ -202,14 +237,16 @@ class GraderConfig:
 
         return (x, y)
 
-    def _parse_model_provider(self) -> str:
-        """解析模型提供商配置"""
-        provider = self.data.get("model_provider", "mock")
+    def _parse_model_providers(self) -> List[str]:
+        """解析模型提供商配置（支持多个，逗号分隔）"""
+        provider = self.data.get("model_providers", "mock")
 
         if not isinstance(provider, str):
-            raise ConfigError("'model_provider' 必须是字符串")
+            raise ConfigError("'model_providers' 必须是字符串")
 
-        return provider.lower()
+        # 支持逗号分隔多个模型
+        providers = [p.strip().lower() for p in provider.split(",")]
+        return providers
 
     def _parse_model_config(self) -> Dict[str, Any]:
         """解析模型配置"""
@@ -220,14 +257,17 @@ class GraderConfig:
 
         return model_config
 
-    def get_scorer_config(self) -> Dict[str, Any]:
+    def get_scorer_config(self, provider: str) -> Dict[str, Any]:
         """
-        获取当前模型提供商的配置
+        获取指定模型提供商的配置
+
+        Args:
+            provider: 模型提供商名称
 
         Returns:
             模型配置字典
         """
-        return self.model_config.get(self.model_provider, {})
+        return self.model_config.get(provider, {})
 
     def validate(self) -> bool:
         """验证配置是否完整有效"""
@@ -238,4 +278,5 @@ class GraderConfig:
         return True
 
     def __repr__(self):
-        return f"GraderConfig(pages={self.total_pages}, questions={len(self.questions)}, provider={self.model_provider}, dir={self.screenshot_dir})"
+        providers = ",".join(self.model_providers)
+        return f"GraderConfig(pages={self.total_pages}, questions={len(self.questions)}, providers={providers}, dir={self.screenshot_dir})"

@@ -312,6 +312,144 @@ class MockScorer(BaseScorer):
         return ScoreResult(score=mock_score, recognized_text=recognized_text)
 
 
+class VolcengineScorer(BaseScorer):
+    """
+    火山引擎评分器实现
+
+    使用 OpenAI 兼容接口调用火山引擎的 doubao-seed-2-0-pro-260215 模型。
+    需要在环境变量中设置 ARK_API_KEY。
+    """
+
+    DEFAULT_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
+    DEFAULT_MODEL = "doubao-seed-2-0-pro-260215"
+
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        """
+        初始化火山引擎评分器
+
+        Args:
+            config: 模型配置字典，可包含 model、base_url 等
+        """
+        self.config = config or {}
+        self.api_key = os.getenv("VOLCENGINE_API_KEY")
+
+        if not self.api_key:
+            raise ScorerError(
+                "未设置 VOLCENGINE_API_KEY 环境变量，"
+                "请运行: export VOLCENGINE_API_KEY=your_api_key"
+            )
+
+        # 导入 openai 库
+        try:
+            from openai import OpenAI
+            self.OpenAI = OpenAI
+        except ImportError:
+            raise ScorerError(
+                "未安装 openai 包，请运行: pip install openai"
+            )
+
+        # 初始化客户端
+        self.client = self.OpenAI(
+            api_key=self.api_key,
+            base_url=self.config.get("base_url", self.DEFAULT_BASE_URL)
+        )
+
+        self.model = self.config.get("model", self.DEFAULT_MODEL)
+
+    def score(self, image_path: str, question_name: str, correct_answer: Optional[str],
+              max_score: int, prompt_template: str) -> ScoreResult:
+        """
+        调用火山引擎模型对截图进行评分
+
+        Args:
+            image_path: 截图文件路径
+            question_name: 题目名称
+            correct_answer: 正确答案
+            max_score: 该题目的满分值
+            prompt_template: 评分提示词模板（从配置读取）
+        Returns:
+            ScoreResult 对象，包含 score 和 recognized_text
+        """
+        # 编码图片
+        base64_image = self._encode_image(image_path)
+
+        # 构建提示词
+        prompt = self._build_prompt(question_name, correct_answer, max_score, prompt_template)
+
+        try:
+            # 发起请求（使用 responses API）
+            response = self.client.responses.create(
+                model=self.model,
+                input=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_image",
+                                "image_url": f"data:image/png;base64,{base64_image}"
+                            },
+                            {
+                                "type": "input_text",
+                                "text": prompt
+                            }
+                        ]
+                    }
+                ]
+            )
+
+            # 提取 AI 返回的完整内容
+            response_content = response.output_text.strip()
+            print(f"  AI 原始响应: {response_content[:200]}...")  # 调试日志
+
+            # 尝试解析 JSON 格式
+            import json
+            try:
+                # 尝试直接解析 JSON
+                result_data = json.loads(response_content)
+                score = float(result_data.get("score", 0.0))
+                recognized_text = str(result_data.get("recognized_text", ""))
+                print(f"  JSON 解析成功: score={score}, recognized_text={recognized_text[:50]}...")
+                return ScoreResult(score=score, recognized_text=recognized_text)
+            except json.JSONDecodeError:
+                # 如果解析失败，尝试从 markdown 代码块中提取 JSON
+                json_match = re.search(r'```(?:json)?\s*\n?({.*?})\s*```', response_content, re.DOTALL)
+                if not json_match:
+                    json_match = re.search(r'```(?:json)?\s*\n?(\{[\s\S]*?\})\s*```', response_content)
+                if json_match:
+                    try:
+                        result_data = json.loads(json_match.group(1))
+                        score = float(result_data.get("score", 0.0))
+                        recognized_text = str(result_data.get("recognized_text", ""))
+                        print(f"  代码块 JSON 解析成功: score={score}")
+                        return ScoreResult(score=score, recognized_text=recognized_text)
+                    except (json.JSONDecodeError, ValueError) as e:
+                        print(f"  代码块 JSON 解析失败: {e}")
+
+                # 如果都无法解析，尝试在整个响应中找 JSON 对象
+                json_pattern = re.search(r'(\{[^{}]*"recognized_text"[^{}]*"score"[^{}]*\})', response_content, re.DOTALL)
+                if json_pattern:
+                    try:
+                        result_data = json.loads(json_pattern.group(1))
+                        score = float(result_data.get("score", 0.0))
+                        recognized_text = str(result_data.get("recognized_text", ""))
+                        print(f"  正则提取 JSON 成功: score={score}")
+                        return ScoreResult(score=score, recognized_text=recognized_text)
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+
+                # 如果都无法解析，回退到原来的方式：提取数字
+                print(f"  JSON 解析失败，尝试提取数字...")
+                numbers = re.findall(r'\d+\.?\d*', response_content)
+                if numbers:
+                    score = float(numbers[0])
+                else:
+                    score = 0.0
+                return ScoreResult(score=score, recognized_text=response_content)
+
+        except Exception as e:
+            raise ScorerError(f"火山引擎 API 调用失败: {e}")
+
+
 class ScorerFactory:
     """
     评分器工厂类
@@ -321,6 +459,7 @@ class ScorerFactory:
 
     _scorers = {
         "dashscope": DashScopeScorer,
+        "volcengine": VolcengineScorer,
         "mock": MockScorer,
     }
 

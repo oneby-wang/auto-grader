@@ -14,6 +14,7 @@ try:
 except ImportError:
     pyautogui = None
 
+from typing import Dict, List
 from .config_loader import GraderConfig, QuestionConfig
 from .screenshot import take_screenshot_safe
 from .scorer import (
@@ -21,6 +22,7 @@ from .scorer import (
     score_image_with_retry, validate_score,
     set_default_scorer
 )
+from .arbitration import ScoreArbitrator
 
 
 class AutomationError(Exception):
@@ -33,7 +35,9 @@ class AutoGrader:
 
     def __init__(self, config: GraderConfig):
         self.config = config
-        self.results = []  # 存储每页的评分结果
+        self.results: List[Dict] = []  # 存储每道题的评分结果
+        self.results_by_model: Dict[str, List[Dict]] = {}  # 按模型存储结果
+        self.arbitration_results: List[Dict] = []  # 仲裁结果
 
         if pyautogui is None:
             raise AutomationError("未安装 pyautogui，请运行: pip install pyautogui")
@@ -42,34 +46,45 @@ class AutoGrader:
         self.screen_width, self.screen_height = pyautogui.size()
         print(f"屏幕分辨率: {self.screen_width}x{self.screen_height}")
 
-        # 初始化评分器
-        self.scorer = self._init_scorer()
+        # 初始化评分器（支持多模型）
+        self.scorers: Dict[str, BaseScorer] = self._init_scorers()
 
-    def _init_scorer(self) -> BaseScorer:
+    def _init_scorers(self) -> Dict[str, BaseScorer]:
         """
-        根据配置初始化评分器
+        根据配置初始化多个评分器
 
         Returns:
-            BaseScorer 实例
+            {provider: BaseScorer} 字典
         """
-        provider = self.config.model_provider
-        model_config = self.config.get_scorer_config()
+        scorers = {}
 
-        print(f"使用评分模型: {provider}")
-        if provider == "dashscope":
-            print("提示: 请确保已设置 DASHSCOPE_API_KEY 环境变量")
+        for provider in self.config.model_providers:
+            model_config = self.config.get_scorer_config(provider)
 
-        try:
-            scorer = ScorerFactory.create_scorer(provider, model_config)
-            # 设置为默认评分器，以便兼容旧接口
-            set_default_scorer(scorer)
-            return scorer
-        except Exception as e:
-            print(f"警告: 初始化评分器失败: {e}")
-            print("回退到模拟评分器")
+            print(f"初始化评分模型: {provider}")
+            if provider == "dashscope":
+                print("  提示: 请确保已设置 DASHSCOPE_API_KEY 环境变量")
+            elif provider == "volcengine":
+                print("  提示: 请确保已设置 VOLCENGINE_API_KEY 环境变量")
+
+            try:
+                scorer = ScorerFactory.create_scorer(provider, model_config)
+                scorers[provider] = scorer
+                # 设置第一个为默认评分器，以便兼容旧接口
+                if len(scorers) == 1:
+                    set_default_scorer(scorer)
+            except Exception as e:
+                print(f"  警告: 初始化评分器 {provider} 失败: {e}")
+                if provider == "mock":
+                    raise  # mock 评分器不应该失败
+
+        if not scorers:
+            print("所有评分器初始化失败，使用模拟评分器")
             fallback_scorer = ScorerFactory.create_scorer("mock")
+            scorers["mock"] = fallback_scorer
             set_default_scorer(fallback_scorer)
-            return fallback_scorer
+
+        return scorers
 
     def _validate_coordinate(self, x: int, y: int, name: str) -> None:
         """验证坐标是否在屏幕范围内"""
@@ -121,37 +136,51 @@ class AutoGrader:
         print(f"  截图保存: {screenshot_path}")
         return screenshot_path
 
-    def _score_screenshot(self, screenshot_path: str, question: QuestionConfig) -> ScoreResult:
-        """对截图进行评分"""
+    def _score_screenshot_multi(self, screenshot_path: str, question: QuestionConfig) -> Dict[str, ScoreResult]:
+        """
+        使用多个模型对截图进行评分
+
+        Args:
+            screenshot_path: 截图文件路径
+            question: 题目配置
+
+        Returns:
+            {provider: ScoreResult} 各模型的评分结果
+        """
         print(f"  调用评分模型...")
         print(f"  题目: {question.name}")
         print(f"  满分值: {question.max_score}")
         if question.correct_answer:
             print(f"  正确答案: {question.correct_answer}")
-        print(f"  使用配置的评分提示词")
 
-        try:
-            result = self.scorer.score(
-                image_path=screenshot_path,
-                question_name=question.name,
-                correct_answer=question.correct_answer,
-                max_score=question.max_score,
-                prompt_template=question.prompt
-            )
-            result = validate_score(result, max_score=question.max_score)
-            print(f"  获得评分: {result.score}")
-            return result
-        except Exception as e:
-            print(f"  评分出错: {e}")
-            # 使用带重试的兼容接口
-            result = score_image_with_retry(
-                screenshot_path,
-                question_name=question.name,
-                correct_answer=question.correct_answer,
-                max_score=question.max_score,
-                prompt_template=question.prompt
-            )
-            return result
+        results = {}
+
+        for provider, scorer in self.scorers.items():
+            print(f"  使用模型 [{provider}] 评分...")
+            try:
+                result = scorer.score(
+                    image_path=screenshot_path,
+                    question_name=question.name,
+                    correct_answer=question.correct_answer,
+                    max_score=question.max_score,
+                    prompt_template=question.prompt
+                )
+                result = validate_score(result, max_score=question.max_score)
+                print(f"    [{provider}] 评分: {result.score}")
+                results[provider] = result
+            except Exception as e:
+                print(f"    [{provider}] 评分出错: {e}")
+                # 使用带重试的兼容接口
+                result = score_image_with_retry(
+                    screenshot_path,
+                    question_name=question.name,
+                    correct_answer=question.correct_answer,
+                    max_score=question.max_score,
+                    prompt_template=question.prompt
+                )
+                results[provider] = result
+
+        return results
 
     def _input_score(self, question: QuestionConfig, score: float) -> None:
         """在指定输入框输入评分"""
@@ -185,6 +214,8 @@ class AutoGrader:
             "screenshot": None,
             "score": None,
             "recognized_text": None,
+            "model_scores": {},
+            "arbitration": None,
             "success": False,
             "error": None
         }
@@ -194,13 +225,49 @@ class AutoGrader:
             screenshot_path = self._take_screenshot_for_question(question, page_index)
             result["screenshot"] = screenshot_path
 
-            # 2. 评分（调用模型）
-            score_result = self._score_screenshot(screenshot_path, question)
-            result["score"] = score_result.score
-            result["recognized_text"] = score_result.recognized_text
+            # 2. 评分（调用所有模型）
+            model_results = self._score_screenshot_multi(screenshot_path, question)
 
-            # 3. 输入评分
-            self._input_score(question, score_result.score)
+            # 记录各模型评分
+            for provider, score_result in model_results.items():
+                result["model_scores"][provider] = {
+                    "score": score_result.score,
+                    "recognized_text": score_result.recognized_text
+                }
+
+            # 3. 仲裁（多模型时）
+            is_multi_model = len(self.scorers) > 1
+            if is_multi_model and question.arbitration:
+                arbitrator = ScoreArbitrator(
+                    threshold=question.arbitration.score_diff_threshold,
+                    strategy=question.arbitration.strategy
+                )
+                arb_result = arbitrator.arbitrate(model_results)
+
+                result["arbitration"] = {
+                    "is_consistent": arb_result.is_consistent,
+                    "final_score": arb_result.final_score,
+                    "avg_score": arb_result.avg_score,
+                    "max_score": arb_result.max_score,
+                    "min_score": arb_result.min_score,
+                    "max_diff": arb_result.max_diff,
+                    "strategy": arb_result.strategy,
+                    "threshold": arb_result.threshold,
+                    "anomalies": arb_result.anomalies
+                }
+
+                final_score = arb_result.final_score
+                print(f"  仲裁结果: 最终分数={final_score}, 策略={arb_result.strategy}, 一致性={arb_result.is_consistent}")
+            else:
+                # 单模型时直接使用该模型的分数
+                first_result = list(model_results.values())[0]
+                final_score = first_result.score
+                result["recognized_text"] = first_result.recognized_text
+
+            result["score"] = final_score
+
+            # 4. 输入评分
+            self._input_score(question, final_score)
 
             result["success"] = True
             print(f"  ✓ 第 {question_index + 1} 题处理完成")
@@ -221,7 +288,7 @@ class AutoGrader:
         print(f"  总页面数: {self.config.total_pages}")
         print(f"  每页题目数: {len(self.config.questions)}")
         print(f"  下一页按钮: {self.config.next_button}")
-        print(f"  模型提供商: {self.config.model_provider}")
+        print(f"  模型提供商: {', '.join(self.config.model_providers)}")
         print(f"  页面间延迟: {self.config.delay_between_pages}秒")
         print(f"  截图保存目录: {self.config.screenshot_dir}")
 
@@ -300,47 +367,134 @@ class AutoGrader:
         success = sum(1 for r in self.results if r["success"])
         failed = total - success
 
-        print(f"\n总页面数: {total}")
+        print(f"\n总题目数: {total}")
         print(f"成功: {success}")
         print(f"失败: {failed}")
 
-        if total > 0:
-            print(f"\n详细结果:")
+        # 多模型时显示对比表
+        is_multi_model = len(self.scorers) > 1
+        if is_multi_model and total > 0:
+            print(f"\n各模型评分对比:")
+            print(f"{'页':<4} {'题':<4} {'名称':<10}", end="")
+            for provider in self.scorers.keys():
+                print(f" {provider:<12}", end="")
+            print(f" {'最终分':<8} {'差异':<8} {'状态'}")
+            print("-" * 80)
+
             for r in self.results:
-                status = "✓" if r["success"] else "✗"
-                score_info = f" 评分: {r['score']}" if r["score"] is not None else ""
-                correct_info = f" 答案: {r['correct_answer']}" if r.get("correct_answer") else ""
-                error_info = f" 错误: {r['error']}" if r["error"] else ""
-                q_index = r.get('question_index', '?')
-                print(f"  {status} 第 {r['page']} 页 第 {q_index} 题 ({r['question']}){correct_info}{score_info}{error_info}")
+                if not r["success"]:
+                    continue
+                print(f"{r['page']:<4} {r['question_index']:<4} {r['question']:<10}", end="")
+                for provider in self.scorers.keys():
+                    model_score = r.get("model_scores", {}).get(provider, {}).get("score", "N/A")
+                    print(f" {str(model_score):<12}", end="")
+                arb = r.get("arbitration")
+                if arb:
+                    print(f" {arb['final_score']:<8.1f} {arb['max_diff']:<8.1f} {'一致' if arb['is_consistent'] else '异常'}")
+                else:
+                    print(f" {r.get('score', 'N/A'):<8} {'N/A':<8} {'-'}")
+
+            # 显示异常题目
+            anomalies = [r for r in self.results if r.get("arbitration") and not r["arbitration"]["is_consistent"]]
+            if anomalies:
+                print(f"\n⚠️  需要人工介入的题目（分差超过阈值）:")
+                for r in anomalies:
+                    arb = r["arbitration"]
+                    print(f"  第 {r['page']} 页 第 {r['question_index']} 题 ({r['question']}): "
+                          f"分差={arb['max_diff']:.1f}, 异常模型={', '.join(arb['anomalies'])}")
 
         # 保存结果到文件
         self._save_results()
 
     def _save_results(self) -> None:
-        """将结果保存到 JSON 文件"""
+        """将结果保存到 JSON 文件（每个模型单独保存）"""
         import json
         from datetime import datetime
 
-        results_file = os.path.join(
-            self.config.screenshot_dir,
-            f"results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        )
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        is_multi_model = len(self.scorers) > 1
 
-        output = {
-            "timestamp": datetime.now().isoformat(),
-            "config": self.config.config_path,
-            "model_provider": self.config.model_provider,
-            "total_pages": self.config.total_pages,
-            "questions_per_page": len(self.config.questions),
-            "total_questions": len(self.results),
-            "results": self.results
-        }
+        if is_multi_model:
+            # 多模型时，每个模型单独保存
+            for provider in self.scorers.keys():
+                results_file = os.path.join(
+                    self.config.screenshot_dir,
+                    f"results_{provider}_{timestamp}.json"
+                )
 
-        with open(results_file, 'w', encoding='utf-8') as f:
-            json.dump(output, f, ensure_ascii=False, indent=2)
+                # 提取该模型的结果
+                model_results = []
+                for r in self.results:
+                    model_result = {
+                        "page": r["page"],
+                        "question_index": r["question_index"],
+                        "question": r["question"],
+                        "correct_answer": r["correct_answer"],
+                        "screenshot": r["screenshot"],
+                        "score": r.get("model_scores", {}).get(provider, {}).get("score"),
+                        "recognized_text": r.get("model_scores", {}).get(provider, {}).get("recognized_text"),
+                        "success": r["success"],
+                        "error": r["error"]
+                    }
+                    model_results.append(model_result)
 
-        print(f"\n详细结果已保存: {results_file}")
+                output = {
+                    "timestamp": datetime.now().isoformat(),
+                    "config": self.config.config_path,
+                    "model_provider": provider,
+                    "total_pages": self.config.total_pages,
+                    "questions_per_page": len(self.config.questions),
+                    "total_questions": len(model_results),
+                    "results": model_results
+                }
+
+                with open(results_file, 'w', encoding='utf-8') as f:
+                    json.dump(output, f, ensure_ascii=False, indent=2)
+
+                print(f"\n[{provider}] 结果已保存: {results_file}")
+
+            # 保存仲裁结果
+            arbitration_file = os.path.join(
+                self.config.screenshot_dir,
+                f"results_arbitration_{timestamp}.json"
+            )
+
+            arbitration_output = {
+                "timestamp": datetime.now().isoformat(),
+                "config": self.config.config_path,
+                "model_providers": list(self.scorers.keys()),
+                "total_pages": self.config.total_pages,
+                "questions_per_page": len(self.config.questions),
+                "total_questions": len(self.results),
+                "results": self.results
+            }
+
+            with open(arbitration_file, 'w', encoding='utf-8') as f:
+                json.dump(arbitration_output, f, ensure_ascii=False, indent=2)
+
+            print(f"[arbitration] 结果已保存: {arbitration_file}")
+        else:
+            # 单模型时，直接保存
+            provider = list(self.scorers.keys())[0]
+            results_file = os.path.join(
+                self.config.screenshot_dir,
+                f"results_{provider}_{timestamp}.json"
+            )
+
+            output = {
+                "timestamp": datetime.now().isoformat(),
+                "config": self.config.config_path,
+                "model_provider": provider,
+                "total_pages": self.config.total_pages,
+                "questions_per_page": len(self.config.questions),
+                "total_questions": len(self.results),
+                "results": self.results
+            }
+
+            with open(results_file, 'w', encoding='utf-8') as f:
+                json.dump(output, f, ensure_ascii=False, indent=2)
+
+            print(f"\n详细结果已保存: {results_file}")
 
 
 def run_grader(config_path: str) -> None:
