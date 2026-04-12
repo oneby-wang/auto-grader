@@ -89,13 +89,9 @@ class AutoGrader:
         # 先点击输入框
         self._click_at(x, y, description)
 
-        # 清除已有内容 (Ctrl+A 然后 Delete)
-        pyautogui.keyDown('ctrl')
-        pyautogui.keyDown('a')
-        pyautogui.keyUp('a')
-        pyautogui.keyUp('ctrl')
-        pyautogui.keyDown('delete')
-        pyautogui.keyUp('delete')
+        # 清除已有内容 (Ctrl+A 全选，然后 Delete 删除)
+        pyautogui.hotkey('ctrl', 'a')
+        pyautogui.press('delete')
 
         # 输入文本
         print(f"  输入: '{text}'")
