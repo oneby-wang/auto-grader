@@ -3,6 +3,7 @@
 """
 
 from dataclasses import dataclass
+import math
 from typing import Dict, List, Optional
 from .scorer import ScoreResult
 
@@ -38,6 +39,11 @@ class ScoreArbitrator:
 
         if strategy not in ("max", "min", "avg"):
             raise ValueError(f"不支持的仲裁策略: {strategy}，必须是 'max'、'min' 或 'avg'")
+
+    @staticmethod
+    def _round_up_to_half(score: float) -> float:
+        """按 0.5 分粒度向上舍入。"""
+        return math.ceil(score * 2) / 2
 
     def arbitrate(self, results: Dict[str, ScoreResult]) -> ArbitrationResult:
         """
@@ -81,7 +87,7 @@ class ScoreArbitrator:
         elif self.strategy == "min":
             final_score = min_score
         else:  # avg
-            final_score = avg_score
+            final_score = self._round_up_to_half(avg_score)
 
         return ArbitrationResult(
             is_consistent=is_consistent,
