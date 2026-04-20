@@ -157,6 +157,7 @@ class AutoGrader:
 
         for provider, scorer in self.scorers.items():
             print(f"  使用模型 [{provider}] 评分...")
+            score_start = time.time()
             try:
                 result = scorer.score(
                     image_path=screenshot_path,
@@ -166,7 +167,7 @@ class AutoGrader:
                     prompt_template=question.prompt
                 )
                 result = validate_score(result, max_score=question.max_score)
-                print(f"    [{provider}] 评分: {result.score}")
+                print(f"    [{provider}] 评分: {result.score} (耗时: {time.time() - score_start:.2f}s)")
                 results[provider] = result
             except Exception as e:
                 print(f"    [{provider}] 评分出错: {e}")
@@ -178,6 +179,7 @@ class AutoGrader:
                     max_score=question.max_score,
                     prompt_template=question.prompt
                 )
+                print(f"    [{provider}] 评分完成: {result.score} (耗时: {time.time() - score_start:.2f}s)")
                 results[provider] = result
 
         return results
@@ -350,6 +352,14 @@ class AutoGrader:
                     if response not in ('y', 'yes', '是'):
                         print("用户取消，停止执行")
                         return  # 完全退出
+
+            # 点击下一页按钮（最后一页不需要）
+            if page_index < self.config.total_pages - 1:
+                self._click_at(
+                    self.config.next_button[0],
+                    self.config.next_button[1],
+                    "下一页按钮"
+                )
 
             print(f"  等待 {self.config.delay_between_pages} 秒加载下一页...")
             time.sleep(self.config.delay_between_pages)
