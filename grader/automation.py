@@ -5,6 +5,7 @@
 import os
 import platform
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
     import pyautogui
@@ -138,7 +139,7 @@ class AutoGrader:
 
     def _score_screenshot_multi(self, screenshot_path: str, question: QuestionConfig) -> Dict[str, ScoreResult]:
         """
-        使用多个模型对截图进行评分
+        使用多个模型对截图进行评分（并行执行）
 
         Args:
             screenshot_path: 截图文件路径
@@ -155,8 +156,7 @@ class AutoGrader:
 
         results = {}
 
-        for provider, scorer in self.scorers.items():
-            print(f"  使用模型 [{provider}] 评分...")
+        def _score_one(provider: str, scorer) -> tuple[str, ScoreResult]:
             score_start = time.time()
             try:
                 result = scorer.score(
@@ -168,10 +168,9 @@ class AutoGrader:
                 )
                 result = validate_score(result, max_score=question.max_score)
                 print(f"    [{provider}] 评分: {result.score} (耗时: {time.time() - score_start:.2f}s)")
-                results[provider] = result
+                return provider, result
             except Exception as e:
                 print(f"    [{provider}] 评分出错: {e}")
-                # 使用带重试的兼容接口
                 result = score_image_with_retry(
                     screenshot_path,
                     question_name=question.name,
@@ -180,6 +179,15 @@ class AutoGrader:
                     prompt_template=question.prompt
                 )
                 print(f"    [{provider}] 评分完成: {result.score} (耗时: {time.time() - score_start:.2f}s)")
+                return provider, result
+
+        with ThreadPoolExecutor(max_workers=len(self.scorers)) as executor:
+            futures = {
+                executor.submit(_score_one, provider, scorer): provider
+                for provider, scorer in self.scorers.items()
+            }
+            for future in as_completed(futures):
+                provider, result = future.result()
                 results[provider] = result
 
         return results

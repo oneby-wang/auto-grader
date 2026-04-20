@@ -1,6 +1,6 @@
 {
   "_comment": "PyAutoGUI 自动化评分配置文件",
-  "total_pages": 5,
+  "total_pages": 100,
   "next_button": [1159, 364],
   "delay_between_pages": 0.5,
   "delay_before_screenshot": 0.5,
@@ -13,7 +13,7 @@
       "thinking_budget": 81920
     },
     "volcengine": {
-      "model": "doubao-seed-2-0-pro-260215",
+      "model": "doubao-seed-1-6-vision-250815",
       "base_url": "https://ark.cn-beijing.volces.com/api/v3"
     },
     "mock": {
@@ -26,8 +26,8 @@
       "name": "填空题",
       "correct_answer": "marking",
       "max_score": 1,
-      "prompt": "你是一位专业的英语教师，需要对学生的答题情况进行评分。\n\n题目类型: {question_name}\n正确答案: {correct_answer}\n\n请查看图片中的学生答案，根据以下标准评分：\n- 如果学生答案与正确答案一致：满分 {max_score} 分\n- 错任何一个字母：0 分，此题目区分大小写\n",
-      "screenshot_area": [393, 251, 644, 336],
+      "prompt": "你是一位专业的英语教师，需要对学生的答题情况进行评分。\n\n题目类型: {question_name}\n正确答案: {correct_answer}\n\n请查看图片中的学生答案，根据以下标准评分：\n- 如果学生答案与正确答案一致：满分 {max_score} 分\n- 错任何一个字母：0 分，此题目区分大小写\n- 请注意，学生可能会有划掉的答案，请识别出学生填写的最终答案，忽略学生划掉的答案，忽略掉 . 这些特殊符号\n",
+      "screenshot_area": [379, 203, 695, 399],
       "input_box": [1153, 251],
       "arbitration": {
         "score_diff_threshold": 0.1,
@@ -38,8 +38,8 @@
       "name": "填空题",
       "correct_answer": "What",
       "max_score": 1,
-      "prompt": "你是一位专业的英语教师，需要对学生的答题情况进行评分。\n\n题目类型: {question_name}\n正确答案: {correct_answer}\n\n请查看图片中的学生答案，根据以下标准评分：\n- 如果学生答案与正确答案一致：满分 {max_score} 分\n- 错任何一个字母：0 分，此题目区分大小写\n",
-      "screenshot_area": [780, 250, 1022, 332],
+      "prompt": "你是一位专业的英语教师，需要对学生的答题情况进行评分。\n\n题目类型: {question_name}\n正确答案: {correct_answer}\n\n请查看图片中的学生答案，根据以下标准评分：\n- 如果学生答案与正确答案一致：满分 {max_score} 分\n- 错任何一个字母：0 分，此题目区分大小写\n- 请注意，学生可能会有划掉的答案，请识别出学生填写的最终答案，忽略学生划掉的答案，忽略掉 . 这些特殊符号\n",
+      "screenshot_area": [766, 211, 1030, 402],
       "input_box": [1150, 306],
       "arbitration": {
         "score_diff_threshold": 0.1,
